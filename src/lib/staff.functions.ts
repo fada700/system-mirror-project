@@ -272,25 +272,47 @@ export interface GananciasResumen {
   dueno_discord_id: string | null;
 }
 
+export interface GananciasResumenExt extends GananciasResumen {
+  por_concepto: Record<string, number>;
+  gastos_sueldos: number;
+  gastos_sueldos_por_rol: Record<string, number>;
+  balance_gobierno: number;
+}
+
 export const getGanancias = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }): Promise<GananciasResumen> => {
+  .handler(async ({ context }): Promise<GananciasResumenExt> => {
     await assertStaff(context.userId);
-    const { data } = await supabaseAdmin.from("ganancias_banco").select("monto, fecha");
+    const { data } = await supabaseAdmin.from("ganancias_banco").select("monto, fecha, concepto");
     const now = Date.now();
     const day = 86400000;
     let hoy = 0, semana = 0, mes = 0, total = 0;
+    const por_concepto: Record<string, number> = {};
     const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
     for (const r of data ?? []) {
       const m = Number(r.monto);
       const t = new Date(r.fecha).getTime();
       total += m;
+      por_concepto[r.concepto] = (por_concepto[r.concepto] ?? 0) + m;
       if (t >= startOfDay.getTime()) hoy += m;
       if (now - t <= 7 * day) semana += m;
       if (now - t <= 30 * day) mes += m;
     }
+    const { data: sueldos } = await supabaseAdmin.from("sueldos_reclamados").select("monto, role");
+    let gastos_sueldos = 0;
+    const gastos_sueldos_por_rol: Record<string, number> = {};
+    for (const s of sueldos ?? []) {
+      const m = Number(s.monto);
+      gastos_sueldos += m;
+      gastos_sueldos_por_rol[s.role] = (gastos_sueldos_por_rol[s.role] ?? 0) + m;
+    }
     const { data: cfg } = await supabaseAdmin.from("config").select("dueno_discord_id").eq("id", 1).single();
-    return { hoy, semana, mes, total, dueno_discord_id: cfg?.dueno_discord_id ?? null };
+    return {
+      hoy, semana, mes, total,
+      dueno_discord_id: cfg?.dueno_discord_id ?? null,
+      por_concepto, gastos_sueldos, gastos_sueldos_por_rol,
+      balance_gobierno: total - gastos_sueldos,
+    };
   });
 
 export const setDueno = createServerFn({ method: "POST" })
