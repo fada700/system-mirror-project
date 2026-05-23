@@ -277,7 +277,12 @@ export interface GananciasResumenExt extends GananciasResumen {
   gastos_sueldos: number;
   gastos_sueldos_por_rol: Record<string, number>;
   balance_gobierno: number;
+  ingresos_gobierno: number; // multas + impuestos (histórico)
+  ingresos_dueno: number;    // membresías + comisiones (histórico al dueño)
+  saldo_gobierno: number;    // pozo actual del gobierno
 }
+
+const CONCEPTOS_GOBIERNO = new Set(["multa", "impuesto"]);
 
 export const getGanancias = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -287,6 +292,7 @@ export const getGanancias = createServerFn({ method: "GET" })
     const now = Date.now();
     const day = 86400000;
     let hoy = 0, semana = 0, mes = 0, total = 0;
+    let ingresos_gobierno = 0, ingresos_dueno = 0;
     const por_concepto: Record<string, number> = {};
     const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
     for (const r of data ?? []) {
@@ -294,6 +300,8 @@ export const getGanancias = createServerFn({ method: "GET" })
       const t = new Date(r.fecha).getTime();
       total += m;
       por_concepto[r.concepto] = (por_concepto[r.concepto] ?? 0) + m;
+      if (CONCEPTOS_GOBIERNO.has(r.concepto)) ingresos_gobierno += m;
+      else ingresos_dueno += m;
       if (t >= startOfDay.getTime()) hoy += m;
       if (now - t <= 7 * day) semana += m;
       if (now - t <= 30 * day) mes += m;
@@ -306,12 +314,15 @@ export const getGanancias = createServerFn({ method: "GET" })
       gastos_sueldos += m;
       gastos_sueldos_por_rol[s.role] = (gastos_sueldos_por_rol[s.role] ?? 0) + m;
     }
-    const { data: cfg } = await supabaseAdmin.from("config").select("dueno_discord_id").eq("id", 1).single();
+    const { data: cfg } = await supabaseAdmin
+      .from("config").select("dueno_discord_id, saldo_gobierno").eq("id", 1).single();
+    const saldo_gobierno = Number((cfg as any)?.saldo_gobierno ?? 0);
     return {
       hoy, semana, mes, total,
       dueno_discord_id: cfg?.dueno_discord_id ?? null,
       por_concepto, gastos_sueldos, gastos_sueldos_por_rol,
-      balance_gobierno: total - gastos_sueldos,
+      balance_gobierno: saldo_gobierno,
+      ingresos_gobierno, ingresos_dueno, saldo_gobierno,
     };
   });
 
