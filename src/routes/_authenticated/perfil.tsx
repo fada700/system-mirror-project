@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getMe } from "@/lib/usuario.functions";
 import { getProximoSueldo, reclamarSueldo } from "@/lib/sueldos.functions";
+import { misMultas, pagarMulta } from "@/lib/mdt.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { formatMXN } from "@/lib/format";
 import { useState } from "react";
