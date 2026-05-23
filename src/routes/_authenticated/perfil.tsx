@@ -30,13 +30,28 @@ function PerfilPage() {
   const fetchMe = useServerFn(getMe);
   const fnSueldo = useServerFn(getProximoSueldo);
   const fnReclamar = useServerFn(reclamarSueldo);
+  const fnMisMultas = useServerFn(misMultas);
+  const fnPagar = useServerFn(pagarMulta);
   const { data, isLoading } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe() });
   const { data: sueldo } = useQuery({
     queryKey: ["proximo-sueldo"],
     queryFn: () => fnSueldo(),
     refetchInterval: 60_000,
   });
+  const { data: multas } = useQuery({ queryKey: ["mis-multas"], queryFn: () => fnMisMultas() });
   const [claiming, setClaiming] = useState(false);
+  const [payingId, setPayingId] = useState<string | null>(null);
+
+  const pagar = async (id: string) => {
+    setPayingId(id);
+    try {
+      await fnPagar({ data: { multa_id: id } });
+      toast.success("Multa pagada");
+      qc.invalidateQueries({ queryKey: ["me"] });
+      qc.invalidateQueries({ queryKey: ["mis-multas"] });
+    } catch (e) { toast.error((e as Error).message); }
+    setPayingId(null);
+  };
 
   const logout = async () => {
     await supabase.auth.signOut();
