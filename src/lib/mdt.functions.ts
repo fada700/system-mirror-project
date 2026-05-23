@@ -96,6 +96,46 @@ export const pagarMulta = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export interface MisMultasRow {
+  id: string;
+  monto: number;
+  motivo: string;
+  estado: "pendiente" | "pagada" | "cancelada";
+  fecha_emision: string;
+  fecha_pago: string | null;
+  policia_nombre: string | null;
+}
+
+export const misMultas = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<MisMultasRow[]> => {
+    const { data: u } = await supabaseAdmin
+      .from("usuarios").select("id").eq("auth_user_id", context.userId).single();
+    if (!u) return [];
+    const { data: rows, error } = await supabaseAdmin
+      .from("multas")
+      .select("id, policia_id, monto, motivo, estado, fecha_emision, fecha_pago")
+      .eq("usuario_id", u.id)
+      .order("fecha_emision", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    if (!rows?.length) return [];
+    const policiaIds = [...new Set(rows.map((r) => r.policia_id).filter(Boolean) as string[])];
+    const { data: pols } = policiaIds.length
+      ? await supabaseAdmin.from("usuarios").select("id, nombre").in("id", policiaIds)
+      : { data: [] as { id: string; nombre: string }[] };
+    const byId = new Map((pols ?? []).map((p) => [p.id, p.nombre]));
+    return rows.map((r: any) => ({
+      id: r.id,
+      monto: Number(r.monto),
+      motivo: r.motivo,
+      estado: r.estado,
+      fecha_emision: r.fecha_emision,
+      fecha_pago: r.fecha_pago,
+      policia_nombre: r.policia_id ? byId.get(r.policia_id) ?? null : null,
+    }));
+  });
+
 export const cancelarMulta = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { multa_id: string; motivo?: string }) =>

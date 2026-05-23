@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getMe } from "@/lib/usuario.functions";
 import { getProximoSueldo, reclamarSueldo } from "@/lib/sueldos.functions";
+import { misMultas, pagarMulta } from "@/lib/mdt.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { formatMXN } from "@/lib/format";
 import { useState } from "react";
@@ -29,13 +30,28 @@ function PerfilPage() {
   const fetchMe = useServerFn(getMe);
   const fnSueldo = useServerFn(getProximoSueldo);
   const fnReclamar = useServerFn(reclamarSueldo);
+  const fnMisMultas = useServerFn(misMultas);
+  const fnPagar = useServerFn(pagarMulta);
   const { data, isLoading } = useQuery({ queryKey: ["me"], queryFn: () => fetchMe() });
   const { data: sueldo } = useQuery({
     queryKey: ["proximo-sueldo"],
     queryFn: () => fnSueldo(),
     refetchInterval: 60_000,
   });
+  const { data: multas } = useQuery({ queryKey: ["mis-multas"], queryFn: () => fnMisMultas() });
   const [claiming, setClaiming] = useState(false);
+  const [payingId, setPayingId] = useState<string | null>(null);
+
+  const pagar = async (id: string) => {
+    setPayingId(id);
+    try {
+      await fnPagar({ data: { multa_id: id } });
+      toast.success("Multa pagada");
+      qc.invalidateQueries({ queryKey: ["me"] });
+      qc.invalidateQueries({ queryKey: ["mis-multas"] });
+    } catch (e) { toast.error((e as Error).message); }
+    setPayingId(null);
+  };
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -118,10 +134,52 @@ function PerfilPage() {
             </div>
           )}
           {data.multas_pendientes > 0 && (
-            <Link to="/perfil" className="block rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2">
+            <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2">
               🚨 {data.multas_pendientes} multa(s) pendiente(s) · {formatMXN(data.multas_pendientes_monto)}
-            </Link>
+            </div>
           )}
+        </section>
+      )}
+
+      {multas && multas.length > 0 && (
+        <section className="container-app mt-6">
+          <div className="text-[10px] uppercase tracking-[0.3em] text-muted-foreground px-1 mb-2">Multas</div>
+          <div className="space-y-2">
+            {multas.map((m) => (
+              <div key={m.id} className="rounded-2xl border border-border bg-surface p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium truncate">{m.motivo}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">
+                      {new Date(m.fecha_emision).toLocaleDateString("es-MX")}
+                      {m.policia_nombre ? ` · ${m.policia_nombre}` : ""}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-mono font-semibold">{formatMXN(m.monto)}</div>
+                    <div className={`text-[10px] uppercase tracking-wider mt-0.5 ${
+                      m.estado === "pendiente" ? "text-destructive"
+                      : m.estado === "pagada" ? "text-emerald-500"
+                      : "text-muted-foreground"
+                    }`}>{m.estado}</div>
+                  </div>
+                </div>
+                {m.estado === "pendiente" && (
+                  <button
+                    onClick={() => pagar(m.id)}
+                    disabled={payingId === m.id || (data.saldo_banco ?? 0) < m.monto}
+                    className="mt-3 w-full rounded-lg bg-destructive text-destructive-foreground py-2 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {payingId === m.id
+                      ? "Pagando…"
+                      : (data.saldo_banco ?? 0) < m.monto
+                      ? "Saldo banco insuficiente"
+                      : `Pagar multa · ${formatMXN(m.monto)}`}
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
