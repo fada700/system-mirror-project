@@ -580,6 +580,7 @@ export type Database = {
         | "rechazada"
         | "cerrada"
       estado_cuenta_general: "activa" | "congelada" | "cerrada"
+      estado_multa: "pendiente" | "pagada" | "cancelada"
       estado_notificacion: "enviado" | "fallido"
       estado_solicitud: "pendiente" | "aprobada" | "rechazada"
       estado_tarjeta_debito: "activa" | "congelada" | "cerrada"
@@ -598,6 +599,11 @@ export type Database = {
         | "admin_quitar"
         | "condonacion"
         | "ganancia_banco"
+        | "multa"
+        | "pago_multa"
+        | "sueldo"
+        | "impuesto"
+        | "compra_membresia"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -735,6 +741,7 @@ export const Constants = {
         "cerrada",
       ],
       estado_cuenta_general: ["activa", "congelada", "cerrada"],
+      estado_multa: ["pendiente", "pagada", "cancelada"],
       estado_notificacion: ["enviado", "fallido"],
       estado_solicitud: ["pendiente", "aprobada", "rechazada"],
       estado_tarjeta_debito: ["activa", "congelada", "cerrada"],
@@ -753,6 +760,11 @@ export const Constants = {
         "admin_quitar",
         "condonacion",
         "ganancia_banco",
+        "multa",
+        "pago_multa",
+        "sueldo",
+        "impuesto",
+        "compra_membresia",
       ],
     },
   },
