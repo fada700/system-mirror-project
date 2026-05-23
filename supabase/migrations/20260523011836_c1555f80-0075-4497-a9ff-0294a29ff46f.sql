@@ -1,0 +1,446 @@
+
+REVOKE EXECUTE ON FUNCTION public.crear_tarjeta_debito_inicial() FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.current_usuario_id() FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.has_role(public.app_role) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.current_usuario_id() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.has_role(public.app_role) TO authenticated;
+
+DROP POLICY IF EXISTS "Admin inserta usuarios" ON public.usuarios;
+CREATE POLICY "Admin inserta usuarios" ON public.usuarios
+  FOR INSERT WITH CHECK (public.has_role('admin'));
+
+CREATE OR REPLACE FUNCTION public.op_depositar(_monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE uid uuid := public.current_usuario_id(); cartera numeric;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT saldo_cartera INTO cartera FROM usuarios WHERE id = uid FOR UPDATE;
+  IF cartera < _monto THEN RAISE EXCEPTION 'Saldo insuficiente en cartera'; END IF;
+  UPDATE usuarios SET saldo_cartera = saldo_cartera - _monto, saldo_banco = saldo_banco + _monto WHERE id = uid;
+  INSERT INTO movimientos (usuario_id, tipo, monto, descripcion) VALUES (uid, 'deposito', _monto, 'Deposito a cuenta');
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.op_retirar(_monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE uid uuid := public.current_usuario_id(); banco numeric;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT saldo_banco INTO banco FROM usuarios WHERE id = uid FOR UPDATE;
+  IF banco < _monto THEN RAISE EXCEPTION 'Saldo insuficiente en banco'; END IF;
+  UPDATE usuarios SET saldo_banco = saldo_banco - _monto, saldo_cartera = saldo_cartera + _monto WHERE id = uid;
+  INSERT INTO movimientos (usuario_id, tipo, monto, descripcion) VALUES (uid, 'retiro', _monto, 'Retiro a cartera');
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.toggle_tarjeta_debito()
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE uid uuid := public.current_usuario_id(); nuevo boolean;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  UPDATE tarjetas_debito SET congelada = NOT congelada WHERE usuario_id = uid RETURNING congelada INTO nuevo;
+  RETURN nuevo;
+END; $$;
+
+REVOKE EXECUTE ON FUNCTION public.op_depositar(numeric) FROM anon, authenticated, public;
+REVOKE EXECUTE ON FUNCTION public.op_retirar(numeric) FROM anon, authenticated, public;
+REVOKE EXECUTE ON FUNCTION public.toggle_tarjeta_debito() FROM anon, authenticated, public;
+
+CREATE OR REPLACE FUNCTION public.dueno_usuario_id()
+RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT u.id FROM public.usuarios u
+  JOIN public.config c ON c.id = 1
+  WHERE u.discord_id = c.dueno_discord_id
+  LIMIT 1
+$$;
+
+CREATE OR REPLACE FUNCTION public.registrar_ganancia(_concepto text, _usuario uuid, _monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE owner_id uuid;
+BEGIN
+  IF _monto IS NULL OR _monto <= 0 THEN RETURN; END IF;
+  INSERT INTO public.ganancias_banco(concepto, usuario_id, monto) VALUES (_concepto, _usuario, _monto);
+  owner_id := public.dueno_usuario_id();
+  IF owner_id IS NOT NULL THEN
+    UPDATE public.usuarios SET saldo_banco = saldo_banco + _monto WHERE id = owner_id;
+    INSERT INTO public.movimientos(usuario_id, tipo, monto, descripcion)
+      VALUES (owner_id, 'ganancia_banco', _monto, 'Ganancia: ' || _concepto);
+  END IF;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.solicitar_tarjeta_credito()
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE uid uuid := public.current_usuario_id(); tc tarjetas_credito%ROWTYPE; sol_id uuid;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  SELECT * INTO tc FROM tarjetas_credito WHERE usuario_id = uid;
+  IF tc.id IS NULL THEN
+    INSERT INTO tarjetas_credito(usuario_id, estado) VALUES (uid, 'pendiente') RETURNING id INTO tc.id;
+  ELSE
+    IF tc.estado IN ('pendiente','activa') THEN RAISE EXCEPTION 'Ya tienes una solicitud o tarjeta activa'; END IF;
+    UPDATE tarjetas_credito SET estado='pendiente' WHERE id = tc.id;
+  END IF;
+  INSERT INTO solicitudes(usuario_id, tipo, estado) VALUES (uid, 'tarjeta_credito', 'pendiente') RETURNING id INTO sol_id;
+  RETURN sol_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.rechazar_tarjeta_credito(_solicitud_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE staff uuid := public.current_usuario_id(); s solicitudes%ROWTYPE;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO s FROM solicitudes WHERE id = _solicitud_id FOR UPDATE;
+  IF s.id IS NULL OR s.tipo <> 'tarjeta_credito' THEN RAISE EXCEPTION 'Solicitud invalida'; END IF;
+  IF s.estado <> 'pendiente' THEN RAISE EXCEPTION 'Solicitud ya resuelta'; END IF;
+  UPDATE tarjetas_credito SET estado='rechazada' WHERE usuario_id = s.usuario_id;
+  UPDATE solicitudes SET estado='rechazada', resuelta_por=staff, resuelta_en=now() WHERE id=s.id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.pagar_credito(_monto numeric)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE uid uuid := public.current_usuario_id(); tc tarjetas_credito%ROWTYPE; u usuarios%ROWTYPE; pago numeric; liquidada boolean := false;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT * INTO tc FROM tarjetas_credito WHERE usuario_id = uid FOR UPDATE;
+  IF tc.id IS NULL OR tc.saldo_usado <= 0 THEN RAISE EXCEPTION 'No tienes deuda'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = uid FOR UPDATE;
+  pago := LEAST(_monto, tc.saldo_usado);
+  IF u.saldo_banco < pago THEN RAISE EXCEPTION 'Saldo insuficiente en banco'; END IF;
+  UPDATE usuarios SET saldo_banco = saldo_banco - pago WHERE id = uid;
+  UPDATE tarjetas_credito SET saldo_usado = saldo_usado - pago WHERE id = tc.id;
+  INSERT INTO movimientos(usuario_id, tipo, monto, descripcion) VALUES (uid, 'pago_credito', pago, 'Pago a tarjeta de credito');
+  IF (tc.saldo_usado - pago) <= 0 THEN
+    liquidada := true;
+    UPDATE tarjetas_credito SET fecha_uso = NULL, fecha_limite_pago = NULL, dias_vencidos = 0,
+      pagos_a_tiempo = pagos_a_tiempo + 1, score = LEAST(100, score + 5),
+      estado = CASE WHEN estado='bloqueada' THEN 'activa' ELSE estado END WHERE id = tc.id;
+  END IF;
+  RETURN jsonb_build_object('pagado', pago, 'liquidada', liquidada);
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.ajustar_limite_credito(_usuario_id uuid, _nuevo_limite numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  IF _nuevo_limite < 0 OR _nuevo_limite > 10000000 THEN RAISE EXCEPTION 'Limite invalido'; END IF;
+  UPDATE tarjetas_credito SET limite = _nuevo_limite WHERE usuario_id = _usuario_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.condonar_deuda(_usuario_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE deuda numeric;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT saldo_usado INTO deuda FROM tarjetas_credito WHERE usuario_id = _usuario_id FOR UPDATE;
+  IF deuda IS NULL OR deuda <= 0 THEN RAISE EXCEPTION 'Sin deuda que condonar'; END IF;
+  UPDATE tarjetas_credito SET saldo_usado = 0, fecha_uso = NULL, fecha_limite_pago = NULL, dias_vencidos = 0,
+    estado = CASE WHEN estado='bloqueada' THEN 'activa' ELSE estado END WHERE usuario_id = _usuario_id;
+  INSERT INTO movimientos(usuario_id, tipo, monto, descripcion) VALUES (_usuario_id, 'condonacion', deuda, 'Deuda condonada');
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.set_dueno_banco(_discord_id text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE clean text := NULLIF(trim(_discord_id), '');
+BEGIN
+  IF NOT public.has_role('admin') THEN RAISE EXCEPTION 'Solo admin'; END IF;
+  IF clean IS NULL THEN UPDATE config SET dueno_discord_id = NULL WHERE id = 1; RETURN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM usuarios WHERE discord_id = clean) THEN RAISE EXCEPTION 'Ese Discord ID no esta registrado en el banco'; END IF;
+  UPDATE config SET dueno_discord_id = clean WHERE id = 1;
+END; $$;
+
+DO $$ BEGIN CREATE TYPE public.estado_cuenta_general AS ENUM ('activa','congelada','cerrada'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE public.estado_tarjeta_debito AS ENUM ('activa','congelada','cerrada'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE public.estado_credito ADD VALUE IF NOT EXISTS 'cerrada'; EXCEPTION WHEN others THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE public.estado_notificacion AS ENUM ('enviado','fallido'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+ALTER TABLE public.usuarios
+  ADD COLUMN IF NOT EXISTS estado_cuenta public.estado_cuenta_general NOT NULL DEFAULT 'activa',
+  ADD COLUMN IF NOT EXISTS clabe text;
+CREATE UNIQUE INDEX IF NOT EXISTS usuarios_clabe_unique ON public.usuarios(clabe) WHERE clabe IS NOT NULL;
+ALTER TABLE public.tarjetas_debito ADD COLUMN IF NOT EXISTS estado public.estado_tarjeta_debito NOT NULL DEFAULT 'activa';
+ALTER TABLE public.tarjetas_credito ADD COLUMN IF NOT EXISTS fecha_corte timestamptz;
+
+DO $$ BEGIN ALTER TABLE public.usuarios ADD CONSTRAINT usuarios_saldo_banco_nonneg CHECK (saldo_banco >= 0); EXCEPTION WHEN duplicate_object THEN NULL; WHEN check_violation THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE public.usuarios ADD CONSTRAINT usuarios_saldo_cartera_nonneg CHECK (saldo_cartera >= 0); EXCEPTION WHEN duplicate_object THEN NULL; WHEN check_violation THEN NULL; END $$;
+
+CREATE OR REPLACE FUNCTION public.generar_clabe()
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE c text;
+BEGIN
+  LOOP
+    c := '6461801' || lpad((floor(random()*99999999999)::bigint)::text, 11, '0');
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM public.usuarios WHERE clabe = c);
+  END LOOP;
+  RETURN c;
+END $$;
+
+UPDATE public.usuarios SET clabe = public.generar_clabe() WHERE clabe IS NULL;
+
+CREATE OR REPLACE FUNCTION public.usuarios_set_clabe()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN IF NEW.clabe IS NULL THEN NEW.clabe := public.generar_clabe(); END IF; RETURN NEW; END $$;
+
+DROP TRIGGER IF EXISTS trg_usuarios_clabe ON public.usuarios;
+CREATE TRIGGER trg_usuarios_clabe BEFORE INSERT ON public.usuarios FOR EACH ROW EXECUTE FUNCTION public.usuarios_set_clabe();
+
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  realizado_por_id uuid,
+  realizado_por_nombre text,
+  realizado_por_rol text,
+  accion text NOT NULL,
+  entidad text,
+  entidad_id uuid,
+  cliente_nombre text,
+  detalle jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ip_address text,
+  fecha_hora timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS audit_logs_realizado_por_idx ON public.audit_logs(realizado_por_id);
+CREATE INDEX IF NOT EXISTS audit_logs_fecha_idx ON public.audit_logs(fecha_hora DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_entidad_id_idx ON public.audit_logs(entidad_id);
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admin ve audit" ON public.audit_logs;
+CREATE POLICY "Admin ve audit" ON public.audit_logs FOR SELECT USING (public.has_role('admin'));
+
+CREATE TABLE IF NOT EXISTS public.notification_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  usuario_id uuid NOT NULL,
+  discord_user_id text,
+  tipo_notificacion text NOT NULL,
+  mensaje text NOT NULL,
+  estado public.estado_notificacion NOT NULL DEFAULT 'enviado',
+  error text,
+  enviado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS notif_usuario_idx ON public.notification_log(usuario_id);
+CREATE INDEX IF NOT EXISTS notif_fecha_idx ON public.notification_log(enviado_en DESC);
+ALTER TABLE public.notification_log ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Ver notifs propias o admin" ON public.notification_log;
+CREATE POLICY "Ver notifs propias o admin" ON public.notification_log FOR SELECT
+USING (usuario_id = public.current_usuario_id() OR public.has_role('admin'));
+
+CREATE INDEX IF NOT EXISTS movimientos_usuario_idx ON public.movimientos(usuario_id);
+CREATE INDEX IF NOT EXISTS movimientos_fecha_idx ON public.movimientos(fecha DESC);
+
+CREATE OR REPLACE FUNCTION public.log_audit(_accion text, _entidad text, _entidad_id uuid, _cliente_nombre text, _detalle jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE staff_id uuid; staff_nombre text; staff_rol text;
+BEGIN
+  staff_id := public.current_usuario_id();
+  IF staff_id IS NOT NULL THEN
+    SELECT nombre INTO staff_nombre FROM usuarios WHERE id = staff_id;
+    SELECT string_agg(role::text, ',') INTO staff_rol FROM roles_usuario WHERE usuario_id = staff_id;
+  END IF;
+  INSERT INTO audit_logs(realizado_por_id, realizado_por_nombre, realizado_por_rol, accion, entidad, entidad_id, cliente_nombre, detalle)
+  VALUES (staff_id, staff_nombre, staff_rol, _accion, _entidad, _entidad_id, _cliente_nombre, COALESCE(_detalle, '{}'::jsonb));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.op_depositar(_monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE uid uuid := public.current_usuario_id(); cartera numeric; est public.estado_cuenta_general;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT saldo_cartera, estado_cuenta INTO cartera, est FROM usuarios WHERE id = uid FOR UPDATE;
+  IF est <> 'activa' THEN RAISE EXCEPTION 'Cuenta no activa (%)', est; END IF;
+  IF cartera < _monto THEN RAISE EXCEPTION 'Saldo insuficiente en cartera'; END IF;
+  UPDATE usuarios SET saldo_cartera = saldo_cartera - _monto, saldo_banco = saldo_banco + _monto WHERE id = uid;
+  INSERT INTO movimientos (usuario_id, tipo, monto, descripcion) VALUES (uid, 'deposito', _monto, 'Deposito a cuenta');
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.op_retirar(_monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE uid uuid := public.current_usuario_id(); banco numeric; est public.estado_cuenta_general;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT saldo_banco, estado_cuenta INTO banco, est FROM usuarios WHERE id = uid FOR UPDATE;
+  IF est <> 'activa' THEN RAISE EXCEPTION 'Cuenta no activa (%)', est; END IF;
+  IF banco < _monto THEN RAISE EXCEPTION 'Saldo insuficiente en banco'; END IF;
+  UPDATE usuarios SET saldo_banco = saldo_banco - _monto, saldo_cartera = saldo_cartera + _monto WHERE id = uid;
+  INSERT INTO movimientos (usuario_id, tipo, monto, descripcion) VALUES (uid, 'retiro', _monto, 'Retiro a cartera');
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.usar_credito(_monto numeric)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE uid uuid := public.current_usuario_id(); tc tarjetas_credito%ROWTYPE; disponible numeric; est public.estado_cuenta_general;
+BEGIN
+  IF uid IS NULL THEN RAISE EXCEPTION 'No autenticado'; END IF;
+  IF _monto IS NULL OR _monto <= 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  SELECT estado_cuenta INTO est FROM usuarios WHERE id = uid;
+  IF est <> 'activa' THEN RAISE EXCEPTION 'Cuenta no activa'; END IF;
+  SELECT * INTO tc FROM tarjetas_credito WHERE usuario_id = uid FOR UPDATE;
+  IF tc.id IS NULL OR tc.estado <> 'activa' THEN RAISE EXCEPTION 'No tienes tarjeta de credito activa'; END IF;
+  disponible := tc.limite - tc.saldo_usado;
+  IF _monto > disponible THEN RAISE EXCEPTION 'Excede tu limite disponible (%)', disponible; END IF;
+  UPDATE tarjetas_credito SET saldo_usado = saldo_usado + _monto,
+    fecha_uso = COALESCE(fecha_uso, now()),
+    fecha_corte = COALESCE(fecha_corte, now()),
+    fecha_limite_pago = COALESCE(fecha_limite_pago, now() + interval '6 days') WHERE id = tc.id;
+  UPDATE usuarios SET saldo_banco = saldo_banco + _monto WHERE id = uid;
+  INSERT INTO movimientos(usuario_id, tipo, monto, descripcion) VALUES (uid, 'uso_credito', _monto, 'Uso de credito');
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.congelar_cuenta(_usuario_id uuid, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE u usuarios%ROWTYPE;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id FOR UPDATE;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  IF u.estado_cuenta = 'cerrada' THEN RAISE EXCEPTION 'Cuenta cerrada, no se puede congelar'; END IF;
+  UPDATE usuarios SET estado_cuenta = 'congelada' WHERE id = u.id;
+  UPDATE tarjetas_debito SET estado = 'congelada', congelada = true WHERE usuario_id = u.id;
+  PERFORM public.log_audit('CONGELAR_CUENTA','usuario', u.id, u.nombre,
+    jsonb_build_object('motivo', _motivo, 'antes', u.estado_cuenta, 'despues', 'congelada'));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.descongelar_cuenta(_usuario_id uuid, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE u usuarios%ROWTYPE;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id FOR UPDATE;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  IF u.estado_cuenta <> 'congelada' THEN RAISE EXCEPTION 'Cuenta no esta congelada'; END IF;
+  UPDATE usuarios SET estado_cuenta = 'activa' WHERE id = u.id;
+  UPDATE tarjetas_debito SET estado = 'activa', congelada = false WHERE usuario_id = u.id;
+  PERFORM public.log_audit('DESCONGELAR_CUENTA','usuario', u.id, u.nombre,
+    jsonb_build_object('motivo', _motivo, 'antes','congelada','despues','activa'));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.cerrar_cuenta(_usuario_id uuid, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE u usuarios%ROWTYPE; antes public.estado_cuenta_general;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id FOR UPDATE;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  IF u.estado_cuenta = 'cerrada' THEN RAISE EXCEPTION 'La cuenta ya esta cerrada'; END IF;
+  antes := u.estado_cuenta;
+  UPDATE usuarios SET estado_cuenta = 'cerrada' WHERE id = u.id;
+  UPDATE tarjetas_debito SET estado = 'cerrada', congelada = true WHERE usuario_id = u.id;
+  UPDATE tarjetas_credito SET estado = 'cerrada' WHERE usuario_id = u.id;
+  PERFORM public.log_audit('CERRAR_CUENTA','usuario', u.id, u.nombre,
+    jsonb_build_object('motivo', _motivo, 'antes', antes, 'despues', 'cerrada'));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.reabrir_cuenta(_usuario_id uuid, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $$
+DECLARE u usuarios%ROWTYPE; antes public.estado_cuenta_general;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id FOR UPDATE;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  IF u.estado_cuenta = 'activa' THEN RAISE EXCEPTION 'La cuenta ya esta activa'; END IF;
+  antes := u.estado_cuenta;
+  UPDATE usuarios SET estado_cuenta = 'activa' WHERE id = u.id;
+  UPDATE tarjetas_debito SET estado = 'activa', congelada = false WHERE usuario_id = u.id;
+  PERFORM public.log_audit('REABRIR_CUENTA','usuario', u.id, u.nombre,
+    jsonb_build_object('motivo', _motivo, 'antes', antes, 'despues', 'activa'));
+END $$;
+GRANT EXECUTE ON FUNCTION public.reabrir_cuenta(uuid, text) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.abrir_debito_manual(_usuario_id uuid, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE u usuarios%ROWTYPE; td tarjetas_debito%ROWTYPE; num text; ncvv text; venc text;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  SELECT * INTO td FROM tarjetas_debito WHERE usuario_id = u.id FOR UPDATE;
+  IF td.id IS NOT NULL AND td.estado <> 'cerrada' THEN RAISE EXCEPTION 'Ya tiene tarjeta debito activa'; END IF;
+  num  := '4' || lpad((floor(random()*999999999999999)::bigint)::text, 15, '0');
+  ncvv := lpad((floor(random()*999)::int)::text, 3, '0');
+  venc := lpad((floor(random()*12)::int + 1)::text, 2, '0') || '/' || to_char(now() + interval '4 years', 'YY');
+  IF td.id IS NULL THEN
+    INSERT INTO tarjetas_debito(usuario_id, numero, cvv, vencimiento, estado, congelada) VALUES (u.id, num, ncvv, venc, 'activa', false);
+  ELSE
+    UPDATE tarjetas_debito SET numero=num, cvv=ncvv, vencimiento=venc, estado='activa', congelada=false WHERE id = td.id;
+  END IF;
+  PERFORM public.log_audit('ABRIR_DEBITO','tarjeta_debito', u.id, u.nombre, jsonb_build_object('motivo', _motivo));
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.abrir_credito_manual(_usuario_id uuid, _limite numeric, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE u usuarios%ROWTYPE; tc tarjetas_credito%ROWTYPE; num text; ncvv text; venc text;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  IF _limite IS NULL OR _limite <= 0 OR _limite > 10000000 THEN RAISE EXCEPTION 'Limite invalido'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  num  := '5' || lpad((floor(random()*999999999999999)::bigint)::text, 15, '0');
+  ncvv := lpad((floor(random()*999)::int)::text, 3, '0');
+  venc := lpad((floor(random()*12)::int + 1)::text, 2, '0') || '/' || to_char(now() + interval '4 years', 'YY');
+  SELECT * INTO tc FROM tarjetas_credito WHERE usuario_id = u.id FOR UPDATE;
+  IF tc.id IS NULL THEN
+    INSERT INTO tarjetas_credito(usuario_id, estado, numero, cvv, vencimiento, limite) VALUES (u.id, 'activa', num, ncvv, venc, _limite);
+  ELSE
+    UPDATE tarjetas_credito SET estado='activa', numero=num, cvv=ncvv, vencimiento=venc, limite=_limite WHERE id = tc.id;
+  END IF;
+  PERFORM public.log_audit('ABRIR_CREDITO','tarjeta_credito', u.id, u.nombre, jsonb_build_object('motivo', _motivo, 'limite', _limite));
+END $$;
+
+CREATE OR REPLACE FUNCTION public.admin_ajustar_saldo(_usuario_id uuid, _delta numeric, _cuenta text, _motivo text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE u usuarios%ROWTYPE;
+BEGIN
+  IF NOT public.has_role('admin') THEN RAISE EXCEPTION 'Solo admin'; END IF;
+  IF _delta = 0 THEN RAISE EXCEPTION 'Monto invalido'; END IF;
+  IF _cuenta NOT IN ('banco','cartera') THEN RAISE EXCEPTION 'Cuenta invalida'; END IF;
+  SELECT * INTO u FROM usuarios WHERE id = _usuario_id FOR UPDATE;
+  IF u.id IS NULL THEN RAISE EXCEPTION 'Usuario no encontrado'; END IF;
+  IF _cuenta = 'banco' THEN
+    IF u.saldo_banco + _delta < 0 THEN RAISE EXCEPTION 'Saldo banco quedaria negativo'; END IF;
+    UPDATE usuarios SET saldo_banco = saldo_banco + _delta WHERE id = u.id;
+  ELSE
+    IF u.saldo_cartera + _delta < 0 THEN RAISE EXCEPTION 'Saldo cartera quedaria negativo'; END IF;
+    UPDATE usuarios SET saldo_cartera = saldo_cartera + _delta WHERE id = u.id;
+  END IF;
+  INSERT INTO movimientos(usuario_id, tipo, monto, descripcion)
+    VALUES (u.id, CASE WHEN _delta > 0 THEN 'admin_dar' ELSE 'admin_quitar' END, abs(_delta),
+            'Admin (' || _cuenta || ')' || CASE WHEN _motivo IS NOT NULL AND length(_motivo)>0 THEN ' - '||_motivo ELSE '' END);
+  PERFORM public.log_audit('AJUSTAR_SALDO','usuario', u.id, u.nombre, jsonb_build_object('cuenta', _cuenta, 'delta', _delta, 'motivo', _motivo));
+END $function$;
+
+CREATE OR REPLACE FUNCTION public.aprobar_tarjeta_credito(_solicitud_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public' AS $function$
+DECLARE staff uuid := public.current_usuario_id(); s solicitudes%ROWTYPE; tc tarjetas_credito%ROWTYPE; u usuarios%ROWTYPE; num text; ncvv text; venc text;
+BEGIN
+  IF NOT (public.has_role('admin') OR public.has_role('trabajador')) THEN RAISE EXCEPTION 'No autorizado'; END IF;
+  SELECT * INTO s FROM solicitudes WHERE id = _solicitud_id FOR UPDATE;
+  IF s.id IS NULL THEN RAISE EXCEPTION 'Solicitud no encontrada'; END IF;
+  IF s.tipo <> 'tarjeta_credito' THEN RAISE EXCEPTION 'Tipo no es tarjeta_credito (%)', s.tipo; END IF;
+  IF s.estado <> 'pendiente' THEN RAISE EXCEPTION 'Solicitud ya resuelta (%)', s.estado; END IF;
+  num  := '5' || lpad((floor(random()*999999999999999)::bigint)::text, 15, '0');
+  ncvv := lpad((floor(random()*999)::int)::text, 3, '0');
+  venc := lpad((floor(random()*12)::int + 1)::text, 2, '0') || '/' || to_char(now() + interval '4 years', 'YY');
+  SELECT * INTO tc FROM tarjetas_credito WHERE usuario_id = s.usuario_id FOR UPDATE;
+  IF tc.id IS NULL THEN
+    INSERT INTO tarjetas_credito(usuario_id, estado, numero, cvv, vencimiento, limite) VALUES (s.usuario_id, 'activa', num, ncvv, venc, 5000);
+  ELSE
+    UPDATE tarjetas_credito SET estado='activa', numero=num, cvv=ncvv, vencimiento=venc, limite = COALESCE(NULLIF(limite,0), 5000) WHERE id = tc.id;
+  END IF;
+  UPDATE solicitudes SET estado='aprobada', resuelta_por=staff, resuelta_en=now() WHERE id=s.id;
+  SELECT * INTO u FROM usuarios WHERE id = s.usuario_id;
+  PERFORM public.log_audit('APROBAR_CREDITO','solicitud', s.id, u.nombre, jsonb_build_object('solicitud', s.id));
+END;
+$function$;
+
+CREATE INDEX IF NOT EXISTS idx_movimientos_usuario_fecha ON public.movimientos(usuario_id, fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_movimientos_fecha ON public.movimientos(fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_fecha ON public.audit_logs(fecha_hora DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_realizado_por ON public.audit_logs(realizado_por_id);
+CREATE INDEX IF NOT EXISTS idx_solicitudes_estado_fecha ON public.solicitudes(estado, fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_usuarios_numero_cliente ON public.usuarios(numero_cliente);
+CREATE INDEX IF NOT EXISTS idx_usuarios_discord_id ON public.usuarios(discord_id);
+CREATE INDEX IF NOT EXISTS idx_tarjetas_credito_usuario ON public.tarjetas_credito(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_tarjetas_debito_usuario ON public.tarjetas_debito(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_notification_log_usuario ON public.notification_log(usuario_id, enviado_en DESC);
+
+ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'policia';
