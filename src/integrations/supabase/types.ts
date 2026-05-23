@@ -64,6 +64,7 @@ export type Database = {
           dueno_discord_id: string | null
           id: number
           interes_diario_porcentaje: number
+          saldo_gobierno: number
         }
         Insert: {
           comision_porcentaje?: number
@@ -72,6 +73,7 @@ export type Database = {
           dueno_discord_id?: string | null
           id?: number
           interes_diario_porcentaje?: number
+          saldo_gobierno?: number
         }
         Update: {
           comision_porcentaje?: number
@@ -80,6 +82,7 @@ export type Database = {
           dueno_discord_id?: string | null
           id?: number
           interes_diario_porcentaje?: number
+          saldo_gobierno?: number
         }
         Relationships: []
       }
