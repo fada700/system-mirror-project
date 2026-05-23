@@ -120,29 +120,34 @@ function AdminPage() {
 
       <section className="container-app mt-6 rounded-2xl border border-border bg-surface p-4">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-semibold">Finanzas del Gobierno</h2>
-          <span className={`text-sm font-bold ${(gan?.balance_gobierno ?? 0) >= 0 ? "text-emerald-500" : "text-red-500"}`}>
-            {formatMXN(gan?.balance_gobierno ?? 0)}
+          <h2 className="text-base font-semibold">Gobierno</h2>
+          <span className={`text-sm font-bold ${(gan?.saldo_gobierno ?? 0) >= 0 ? "text-emerald-500" : "text-red-500"}`}>
+            Pozo: {formatMXN(gan?.saldo_gobierno ?? 0)}
           </span>
         </div>
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <p className="text-xs text-muted-foreground mb-3">
+          Ingresos: multas + impuestos. Gastos: sueldos de trabajadores/policías/admin.
+        </p>
+        <div className="grid grid-cols-3 gap-3 mb-4">
           <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3">
-            <div className="text-[11px] uppercase text-emerald-600 font-semibold">Generado total</div>
-            <div className="text-lg font-bold text-emerald-500">{formatMXN(gan?.total ?? 0)}</div>
+            <div className="text-[11px] uppercase text-emerald-600 font-semibold">Ingresos</div>
+            <div className="text-lg font-bold text-emerald-500">{formatMXN(gan?.ingresos_gobierno ?? 0)}</div>
           </div>
           <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3">
-            <div className="text-[11px] uppercase text-red-600 font-semibold">Gastado en sueldos</div>
+            <div className="text-[11px] uppercase text-red-600 font-semibold">Sueldos pagados</div>
             <div className="text-lg font-bold text-red-500">{formatMXN(gan?.gastos_sueldos ?? 0)}</div>
+          </div>
+          <div className="rounded-xl bg-primary/10 border border-primary/30 p-3">
+            <div className="text-[11px] uppercase text-primary font-semibold">Pozo actual</div>
+            <div className="text-lg font-bold">{formatMXN(gan?.saldo_gobierno ?? 0)}</div>
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <div className="text-xs font-semibold text-muted-foreground mb-2">Ingresos por concepto</div>
             <div className="space-y-1">
-              {Object.entries(gan?.por_concepto ?? {}).length === 0 && (
-                <div className="text-xs text-muted-foreground">Sin ingresos aún.</div>
-              )}
               {Object.entries(gan?.por_concepto ?? {})
+                .filter(([k]) => k === "multa" || k === "impuesto")
                 .sort((a, b) => b[1] - a[1])
                 .map(([k, v]) => (
                   <div key={k} className="flex justify-between text-sm border-b border-border/40 py-1">
@@ -150,6 +155,9 @@ function AdminPage() {
                     <span className="font-mono text-emerald-500">+{formatMXN(v)}</span>
                   </div>
                 ))}
+              {Object.entries(gan?.por_concepto ?? {}).filter(([k]) => k === "multa" || k === "impuesto").length === 0 && (
+                <div className="text-xs text-muted-foreground">Sin ingresos aún.</div>
+              )}
             </div>
           </div>
           <div>
@@ -168,6 +176,32 @@ function AdminPage() {
                 ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="container-app mt-6 rounded-2xl border border-border bg-surface p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-semibold">Dueño del banco</h2>
+          <span className="text-sm font-bold text-emerald-500">
+            Total: {formatMXN(gan?.ingresos_dueno ?? 0)}
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Ingresos del dueño: membresías + comisiones de transferencia. Se acreditan a su saldo.
+        </p>
+        <div className="space-y-1">
+          {Object.entries(gan?.por_concepto ?? {})
+            .filter(([k]) => k !== "multa" && k !== "impuesto")
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => (
+              <div key={k} className="flex justify-between text-sm border-b border-border/40 py-1">
+                <span className="capitalize">{k.replace(/_/g, " ")}</span>
+                <span className="font-mono text-emerald-500">+{formatMXN(v)}</span>
+              </div>
+            ))}
+          {Object.entries(gan?.por_concepto ?? {}).filter(([k]) => k !== "multa" && k !== "impuesto").length === 0 && (
+            <div className="text-xs text-muted-foreground">Sin ingresos aún.</div>
+          )}
         </div>
       </section>
 
