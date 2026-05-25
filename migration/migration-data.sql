@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict 7FTU9ZtcXEimujfMcAdI4hx6lFwz1FZDkHqq2ucLibk4bOQFwunwl1RT2HYetAg
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9
@@ -289,5 +288,4 @@ INSERT INTO public.tarjetas_debito (id, usuario_id, numero, cvv, vencimiento, co
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 7FTU9ZtcXEimujfMcAdI4hx6lFwz1FZDkHqq2ucLibk4bOQFwunwl1RT2HYetAg
 

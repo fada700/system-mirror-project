@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict oLdS7fMnnycPHfh5Rs7b4CpZ7hJDM7V4c1Nsap5cVNc2YdUuvf7SH1wFRBVyep4
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.9
@@ -23,14 +22,12 @@ SET row_security = off;
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA public;
 
 
 --
 -- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
 --
 
-COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
@@ -2028,5 +2025,4 @@ CREATE POLICY "ver sueldos propios o staff" ON public.sueldos_reclamados FOR SEL
 -- PostgreSQL database dump complete
 --
 
-\unrestrict oLdS7fMnnycPHfh5Rs7b4CpZ7hJDM7V4c1Nsap5cVNc2YdUuvf7SH1wFRBVyep4
 
