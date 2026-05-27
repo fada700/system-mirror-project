@@ -38,7 +38,7 @@ function TrabajadorLoginPage() {
         <div className="pt-16">
           <div className="text-[10px] uppercase tracking-[0.4em] text-amber-600 font-bold">Acceso staff</div>
           <div className="text-2xl font-bold tracking-tight mt-2">Panel Trabajador</div>
-          <div className="mt-1 text-xs uppercase tracking-[0.3em] text-muted-foreground">BMX · Staff</div>
+          <div className="mt-1 text-xs uppercase tracking-[0.3em] text-muted-foreground">Banxico · Empleado</div>
         </div>
 
         <div className="space-y-5">
