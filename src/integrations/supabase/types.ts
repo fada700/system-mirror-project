@@ -650,7 +650,7 @@ export type Database = {
           _motivo: string
           _usuario_id: string
         }
-        Returns: undefined
+        Returns: Json
       }
       ajustar_limite_credito: {
         Args: { _nuevo_limite: number; _usuario_id: string }
