@@ -29,9 +29,6 @@ import { Route as AuthenticatedEstadoCuentaRouteImport } from './routes/_authent
 import { Route as AuthenticatedDepositarRouteImport } from './routes/_authenticated/depositar'
 import { Route as AuthenticatedCreditoRouteImport } from './routes/_authenticated/credito'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
-import { Route as AuthSecretClaveSecretaRouteImport } from './routes/auth/secret/clave-secreta'
-import { Route as ApiPublicObtenerClaveServicioRouteImport } from './routes/api/public/obtener-clave-servicio'
-import { Route as ApiPublicDeshabilitarClaveServicioRouteImport } from './routes/api/public/deshabilitar-clave-servicio'
 import { Route as ApiPublicCronImpuestosRouteImport } from './routes/api/public/cron-impuestos'
 import { Route as ApiPublicCronCreditRemindersRouteImport } from './routes/api/public/cron-credit-reminders'
 
@@ -136,23 +133,6 @@ const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthSecretClaveSecretaRoute = AuthSecretClaveSecretaRouteImport.update({
-  id: '/auth/secret/clave-secreta',
-  path: '/auth/secret/clave-secreta',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicObtenerClaveServicioRoute =
-  ApiPublicObtenerClaveServicioRouteImport.update({
-    id: '/api/public/obtener-clave-servicio',
-    path: '/api/public/obtener-clave-servicio',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiPublicDeshabilitarClaveServicioRoute =
-  ApiPublicDeshabilitarClaveServicioRouteImport.update({
-    id: '/api/public/deshabilitar-clave-servicio',
-    path: '/api/public/deshabilitar-clave-servicio',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const ApiPublicCronImpuestosRoute = ApiPublicCronImpuestosRouteImport.update({
   id: '/api/public/cron-impuestos',
   path: '/api/public/cron-impuestos',
@@ -187,9 +167,6 @@ export interface FileRoutesByFullPath {
   '/auth/code': typeof AuthCodeRoute
   '/api/public/cron-credit-reminders': typeof ApiPublicCronCreditRemindersRoute
   '/api/public/cron-impuestos': typeof ApiPublicCronImpuestosRoute
-  '/api/public/deshabilitar-clave-servicio': typeof ApiPublicDeshabilitarClaveServicioRoute
-  '/api/public/obtener-clave-servicio': typeof ApiPublicObtenerClaveServicioRoute
-  '/auth/secret/clave-secreta': typeof AuthSecretClaveSecretaRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -213,9 +190,6 @@ export interface FileRoutesByTo {
   '/auth/code': typeof AuthCodeRoute
   '/api/public/cron-credit-reminders': typeof ApiPublicCronCreditRemindersRoute
   '/api/public/cron-impuestos': typeof ApiPublicCronImpuestosRoute
-  '/api/public/deshabilitar-clave-servicio': typeof ApiPublicDeshabilitarClaveServicioRoute
-  '/api/public/obtener-clave-servicio': typeof ApiPublicObtenerClaveServicioRoute
-  '/auth/secret/clave-secreta': typeof AuthSecretClaveSecretaRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -241,9 +215,6 @@ export interface FileRoutesById {
   '/auth/code': typeof AuthCodeRoute
   '/api/public/cron-credit-reminders': typeof ApiPublicCronCreditRemindersRoute
   '/api/public/cron-impuestos': typeof ApiPublicCronImpuestosRoute
-  '/api/public/deshabilitar-clave-servicio': typeof ApiPublicDeshabilitarClaveServicioRoute
-  '/api/public/obtener-clave-servicio': typeof ApiPublicObtenerClaveServicioRoute
-  '/auth/secret/clave-secreta': typeof AuthSecretClaveSecretaRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -269,9 +240,6 @@ export interface FileRouteTypes {
     | '/auth/code'
     | '/api/public/cron-credit-reminders'
     | '/api/public/cron-impuestos'
-    | '/api/public/deshabilitar-clave-servicio'
-    | '/api/public/obtener-clave-servicio'
-    | '/auth/secret/clave-secreta'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -295,9 +263,6 @@ export interface FileRouteTypes {
     | '/auth/code'
     | '/api/public/cron-credit-reminders'
     | '/api/public/cron-impuestos'
-    | '/api/public/deshabilitar-clave-servicio'
-    | '/api/public/obtener-clave-servicio'
-    | '/auth/secret/clave-secreta'
   id:
     | '__root__'
     | '/'
@@ -322,9 +287,6 @@ export interface FileRouteTypes {
     | '/auth/code'
     | '/api/public/cron-credit-reminders'
     | '/api/public/cron-impuestos'
-    | '/api/public/deshabilitar-clave-servicio'
-    | '/api/public/obtener-clave-servicio'
-    | '/auth/secret/clave-secreta'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -337,9 +299,6 @@ export interface RootRouteChildren {
   AuthCodeRoute: typeof AuthCodeRoute
   ApiPublicCronCreditRemindersRoute: typeof ApiPublicCronCreditRemindersRoute
   ApiPublicCronImpuestosRoute: typeof ApiPublicCronImpuestosRoute
-  ApiPublicDeshabilitarClaveServicioRoute: typeof ApiPublicDeshabilitarClaveServicioRoute
-  ApiPublicObtenerClaveServicioRoute: typeof ApiPublicObtenerClaveServicioRoute
-  AuthSecretClaveSecretaRoute: typeof AuthSecretClaveSecretaRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -484,27 +443,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/auth/secret/clave-secreta': {
-      id: '/auth/secret/clave-secreta'
-      path: '/auth/secret/clave-secreta'
-      fullPath: '/auth/secret/clave-secreta'
-      preLoaderRoute: typeof AuthSecretClaveSecretaRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/obtener-clave-servicio': {
-      id: '/api/public/obtener-clave-servicio'
-      path: '/api/public/obtener-clave-servicio'
-      fullPath: '/api/public/obtener-clave-servicio'
-      preLoaderRoute: typeof ApiPublicObtenerClaveServicioRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/deshabilitar-clave-servicio': {
-      id: '/api/public/deshabilitar-clave-servicio'
-      path: '/api/public/deshabilitar-clave-servicio'
-      fullPath: '/api/public/deshabilitar-clave-servicio'
-      preLoaderRoute: typeof ApiPublicDeshabilitarClaveServicioRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/public/cron-impuestos': {
       id: '/api/public/cron-impuestos'
       path: '/api/public/cron-impuestos'
@@ -568,10 +506,6 @@ const rootRouteChildren: RootRouteChildren = {
   AuthCodeRoute: AuthCodeRoute,
   ApiPublicCronCreditRemindersRoute: ApiPublicCronCreditRemindersRoute,
   ApiPublicCronImpuestosRoute: ApiPublicCronImpuestosRoute,
-  ApiPublicDeshabilitarClaveServicioRoute:
-    ApiPublicDeshabilitarClaveServicioRoute,
-  ApiPublicObtenerClaveServicioRoute: ApiPublicObtenerClaveServicioRoute,
-  AuthSecretClaveSecretaRoute: AuthSecretClaveSecretaRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
