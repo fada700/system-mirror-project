@@ -1,0 +1,1 @@
+ALTER TABLE public.config ADD COLUMN IF NOT EXISTS clave_servicio_deshabilitada boolean NOT NULL DEFAULT false;

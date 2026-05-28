@@ -58,6 +58,7 @@ export type Database = {
       }
       config: {
         Row: {
+          clave_servicio_deshabilitada: boolean
           comision_porcentaje: number
           costo_membresia_black: number
           costo_membresia_plus: number
@@ -67,6 +68,7 @@ export type Database = {
           saldo_gobierno: number
         }
         Insert: {
+          clave_servicio_deshabilitada?: boolean
           comision_porcentaje?: number
           costo_membresia_black?: number
           costo_membresia_plus?: number
@@ -76,6 +78,7 @@ export type Database = {
           saldo_gobierno?: number
         }
         Update: {
+          clave_servicio_deshabilitada?: boolean
           comision_porcentaje?: number
           costo_membresia_black?: number
           costo_membresia_plus?: number
