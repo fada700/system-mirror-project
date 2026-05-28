@@ -12,8 +12,7 @@ import {
 import { DISCORD_GUILD_ID, DISCORD_OAUTH_SCOPES, ROLE_ID_ADMIN, ROLE_ID_TRABAJADOR } from "./discord-config";
 
 async function derivePassword(discordId: string): Promise<string> {
-  // ✅ FIX: usar LOGIN_SECRET dedicado, no SUPABASE_SERVICE_ROLE_KEY
-  const secret = process.env.LOGIN_SECRET ?? "fallback";
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "fallback";
   const data = new TextEncoder().encode(`${discordId}:${secret}`);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash))
@@ -43,8 +42,6 @@ async function ensureUsuario(discord: {
     .maybeSingle();
 
   if (existing?.auth_user_id) {
-    // ✅ FIX: siempre actualizar la password por si el secret cambió
-    await supabaseAdmin.auth.admin.updateUserById(existing.auth_user_id, { password });
     await supabaseAdmin
       .from("usuarios")
       .update({ nombre, discord_username: discord.username, discord_avatar_url: avatar_url })
