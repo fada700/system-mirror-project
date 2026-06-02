@@ -643,15 +643,26 @@ export type Database = {
         Args: { _motivo: string; _usuario_id: string }
         Returns: undefined
       }
-      admin_ajustar_saldo: {
-        Args: {
-          _cuenta: string
-          _delta: number
-          _motivo: string
-          _usuario_id: string
-        }
-        Returns: Json
-      }
+      admin_ajustar_saldo:
+        | {
+            Args: {
+              _cuenta: string
+              _delta: number
+              _motivo: string
+              _usuario_id: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              _confirm?: boolean
+              _cuenta: string
+              _delta: number
+              _motivo: string
+              _usuario_id: string
+            }
+            Returns: Json
+          }
       ajustar_limite_credito: {
         Args: { _nuevo_limite: number; _usuario_id: string }
         Returns: undefined
